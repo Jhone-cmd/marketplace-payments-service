@@ -48,7 +48,7 @@ export class PaymentConsumerService implements OnModuleInit {
         }
     }
 
-    private processPaymentOrder(message: PaymentOrderMessage): void {
+    private async processPaymentOrder(message: PaymentOrderMessage): Promise<void> {
         try {
 
             // Log inicial com informações da mensagem
