@@ -26,6 +26,15 @@ export class PaymentConsumerService implements OnModuleInit {
 
             this.logger.log('👂 Starting to consume payment orders from queue');
 
+            const isConnected = await this.rabbitmqService.waitForConnection();
+
+            if (!isConnected) {
+                this.logger.error(
+                    '❌ Could not connect to RabbitMQ after multiple attempts',
+                );
+                return;
+            }
+
             // Registra callback para processar cada mensagem
             // O bind(this) garante que o 'this' dentro do callback seja esta classe
             await this.paymentQueueService.consumePaymentOrders(
@@ -39,7 +48,7 @@ export class PaymentConsumerService implements OnModuleInit {
         }
     }
 
-    private async processPaymentOrder(message: PaymentOrderMessage): Promise<void> {
+    private processPaymentOrder(message: PaymentOrderMessage): void {
         try {
 
             // Log inicial com informações da mensagem
