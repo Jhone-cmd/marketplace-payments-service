@@ -121,7 +121,17 @@ export class RabbitmqService implements OnModuleInit, OnModuleDestroy {
             }
             await this.channel.assertExchange(exchange, 'topic', { durable: true });
 
-            const queue = await this.channel.assertQueue(queueName, { durable: true, arguments: { 'x-message-ttl': 86400000, 'x-max-length': 10000 } });
+            const dlxExchange = `${exchange}.dlx`;
+            await this.channel.assertExchange(dlxExchange, 'topic', { durable: true });
+
+            const dlxName = `${queueName}.dlq`;
+            const dlqRoutingKey = `${routingKey}.dead`;
+
+            await this.channel.assertQueue(dlxName, { durable: true, arguments: { 'x-message-ttl': 604800000 } }); // 7 dias para análise de mensagens na DLQ
+
+            await this.channel.bindQueue(dlxName, dlxExchange, dlqRoutingKey);
+
+            const queue = await this.channel.assertQueue(queueName, { durable: true, arguments: { 'x-message-ttl': 86400000, 'x-max-length': 10000, 'x-dead-letter-exchange': dlxExchange, 'x-dead-letter-routing-key': dlqRoutingKey } });
 
             await this.channel.bindQueue(queue.queue, exchange, routingKey);
 
@@ -146,7 +156,7 @@ export class RabbitmqService implements OnModuleInit, OnModuleDestroy {
                     } catch (error: Error | any) {
                         this.logger.error('❌ Error processing message', error.message || error);
                         this.channel.nack(msg, false, false); // Reject the message and do not requeue
-                        // TODO: dead letter queue handling can be implemented here if needed
+                        this.logger.warn(`⚠️  Message sent to dead-letter queue: ${dlxName}`);
                     }
                 }
             });
