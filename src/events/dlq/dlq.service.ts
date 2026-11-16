@@ -221,4 +221,64 @@ export class DlqService {
         return { processed, failed };
     }
 
+    /**
+     * Remove uma mensagem da DLQ (descarta permanentemente)
+     */
+    async discardMessage(orderId: string): Promise<boolean> {
+
+        const channel = this.rabbitmqService.getChannel();
+        if (!channel) {
+            throw new Error('RabbitMQ channel not available');
+        }
+
+        const stats = await this.getStats();
+        let found = false;
+
+        for (let i = 0; i < stats.messageCount; i++) {
+
+            const msg = await channel.get(this.DLQ_NAME, { noAck: false });
+
+            if (!msg) break;
+
+            try {
+
+                const content = JSON.parse(
+                    msg.content.toString(),
+                ) as PaymentOrderMessage;
+
+                if (content.orderId === orderId) {
+                    // Encontrou! Remove permanentemente (ack sem reprocessar)
+                    channel.ack(msg);
+                    found = true;
+                    this.logger.warn(`🗑️ Message ${orderId} discarded from DLQ`);
+                    break;
+                } else {
+                    // Não é a mensagem, devolve
+                    channel.nack(msg, false, true);
+                }
+            } catch {
+
+                channel.nack(msg, false, true);
+            }
+        }
+
+        return found;
+    }
+
+    /**
+     * Limpa toda a DLQ (CUIDADO!)
+     */
+    async purgeAll(): Promise<number> {
+
+        const channel = this.rabbitmqService.getChannel();
+        if (!channel) {
+            throw new Error('RabbitMQ channel not available');
+        }
+
+        const result = await channel.purgeQueue(this.DLQ_NAME);
+
+        this.logger.warn(`🗑️ Purged ${result.messageCount} messages from DLQ`);
+
+        return result.messageCount;
+    }
 }
