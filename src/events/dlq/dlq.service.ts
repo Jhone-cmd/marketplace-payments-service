@@ -112,4 +112,113 @@ export class DlqService {
 
         return messages;
     }
+
+    /**
+  * Reprocessa uma mensagem específica da DLQ
+  * Remove da DLQ e publica na fila principal
+  */
+
+    async reprocessMessage(orderId: string): Promise<boolean> {
+
+        const channel = this.rabbitmqService.getChannel();
+        if (!channel) {
+            throw new Error('RabbitMQ channel not available');
+        }
+
+        const stats = await this.getStats();
+        let found = false;
+
+        for (let i = 0; i < stats.messageCount; i++) {
+            const msg = await channel.get(this.DLQ_NAME, { noAck: false });
+
+            if (!msg) break;
+
+            try {
+                const content = JSON.parse(
+                    msg.content.toString(),
+                ) as PaymentOrderMessage;
+
+                if (content.orderId === orderId) {
+                    // Encontrou! Republica na fila principal
+                    await this.rabbitmqService.publishMessage(
+                        this.EXCHANGE,
+                        this.ROUTING_KEY,
+                        content,
+                    );
+
+                    // Remove da DLQ (ack)
+                    channel.ack(msg);
+                    found = true;
+
+                    this.logger.log(`✅ Message ${orderId} reprocessed successfully`);
+                    break;
+                } else {
+                    // Não é a mensagem que procuramos, devolve para DLQ
+                    channel.nack(msg, false, true);
+                }
+            } catch (error) {
+
+                channel.nack(msg, false, true);
+                this.logger.error('Failed to process DLQ message:', error);
+            }
+        }
+
+        return found;
+    }
+
+    /**
+     * Reprocessa todas as mensagens da DLQ
+     */
+    async reprocessAll(): Promise<{ processed: number; failed: number }> {
+
+        const channel = this.rabbitmqService.getChannel();
+        if (!channel) {
+            throw new Error('RabbitMQ channel not available');
+        }
+
+        const stats = await this.getStats();
+        let processed = 0;
+        let failed = 0;
+
+        this.logger.log(`🔄 Reprocessing ${stats.messageCount} messages from DLQ`);
+
+        for (let i = 0; i < stats.messageCount; i++) {
+
+            const msg = await channel.get(this.DLQ_NAME, { noAck: false });
+
+            if (!msg) break;
+
+            try {
+
+                const content = JSON.parse(
+                    msg.content.toString(),
+                ) as PaymentOrderMessage;
+
+                // Republica na fila principal
+                await this.rabbitmqService.publishMessage(
+                    this.EXCHANGE,
+                    this.ROUTING_KEY,
+                    content,
+                );
+                // Remove da DLQ
+                channel.ack(msg);
+                processed++;
+
+                this.logger.log(`✅ Reprocessed order ${content.orderId}`);
+
+            } catch (error) {
+                // Falhou, mantém na DLQ
+                channel.nack(msg, false, true);
+                failed++;
+                this.logger.error('Failed to reprocess message:', error);
+            }
+        }
+
+        this.logger.log(
+            `🏁 Reprocess complete: ${processed} processed, ${failed} failed`,
+        );
+
+        return { processed, failed };
+    }
+
 }
