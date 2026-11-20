@@ -113,16 +113,28 @@ export class RabbitmqService implements OnModuleInit, OnModuleDestroy {
         }
     }
 
-    async subscribeToQueue(queueName: string, exchange: string, routingKey: string, cb: (message: unknown) => Promise<void>): Promise<void> {
+    async subscribeToQueue(queueName: string, exchange: string, routingKey: string, cb: (message: unknown) => Promise<void>, options: {
+        maxRetries?: number,
+        retryDelayMs?: number
+    }): Promise<void> {
         try {
+
+            const maxRetries = options.maxRetries ?? 3;
+            const retryDelayMs = options.retryDelayMs ?? 3000;
+
             if (!this.channel) {
                 this.logger.warn('⚠️  RabbitMQ channel not available, skipping queue subscription');
                 return;
             }
             await this.channel.assertExchange(exchange, 'topic', { durable: true });
 
+            const retryExchange = `${exchange}.retry.dlx`;
+            await this.channel.assertExchange(retryExchange, 'topic', { durable: true });
+
             const dlxExchange = `${exchange}.dlx`;
             await this.channel.assertExchange(dlxExchange, 'topic', { durable: true });
+
+            // DLQ
 
             const dlxName = `${queueName}.dlq`;
             const dlqRoutingKey = `${routingKey}.dead`;
@@ -131,7 +143,19 @@ export class RabbitmqService implements OnModuleInit, OnModuleDestroy {
 
             await this.channel.bindQueue(dlxName, dlxExchange, dlqRoutingKey);
 
-            const queue = await this.channel.assertQueue(queueName, { durable: true, arguments: { 'x-message-ttl': 86400000, 'x-max-length': 10000, 'x-dead-letter-exchange': dlxExchange, 'x-dead-letter-routing-key': dlqRoutingKey } });
+            // Retry
+
+            const routingKeyRetry = `${routingKey}.retry`;
+
+            const retryQueueName = `${queueName}.retry`;
+            await this.channel.assertQueue(retryQueueName, { durable: true, arguments: { 'x-message-ttl': retryDelayMs, 'x-dead-letter-exchange': exchange, 'x-dead-letter-routing-key': routingKey } }); // 30 segundos de espera antes de reprocessar
+
+
+            await this.channel.bindQueue(retryQueueName, retryExchange, routingKeyRetry);
+
+            // Main Queue
+
+            const queue = await this.channel.assertQueue(queueName, { durable: true, arguments: { 'x-message-ttl': 86400000, 'x-max-length': 10000, 'x-dead-letter-exchange': retryExchange, 'x-dead-letter-routing-key': routingKeyRetry } });
 
             await this.channel.bindQueue(queue.queue, exchange, routingKey);
 
