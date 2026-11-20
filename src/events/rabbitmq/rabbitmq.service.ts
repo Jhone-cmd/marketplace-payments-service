@@ -188,4 +188,19 @@ export class RabbitmqService implements OnModuleInit, OnModuleDestroy {
             this.logger.error(`❌ Error subscribing to queue ${queueName}`, error.message || error);
         }
     }
+
+    private getRetryCount(msg: amqp.Message): number {
+        const xDeath = msg.properties.headers?.['x-death'] as | Array<{
+            count: number,
+            queue: string
+        }> | undefined
+
+        if (!xDeath || xDeath.length === 0) {
+            return 0;
+        }
+
+        return xDeath.filter((death) => !death.queue.endsWith('.retry')).reduce((sum, death) => sum + (death.count || 0), 0);
+    }
 }
+
+
